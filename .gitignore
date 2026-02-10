@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual envs (optional)
+.venv/
+venv/
+
+# CMake / Qt builds
+gui/build/
+gui/build-msvc/
+gui/build-mingw/
+launcher/build/
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
