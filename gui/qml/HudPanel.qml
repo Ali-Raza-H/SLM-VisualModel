@@ -109,6 +109,7 @@ Item {
         anchors.bottom: parent.bottom
         anchors.top: titleText.bottom
         anchors.margins: 12
+        clip: true
     }
 
     default property alias content: contentItem.data

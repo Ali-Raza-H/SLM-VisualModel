@@ -64,6 +64,16 @@ ApplicationWindow {
         }
     }
 
+    BackendMonitor {
+        id: backendWin
+        visible: false
+    }
+
+    Shortcut {
+        sequence: "F12"
+        onActivated: backendWin.visible = !backendWin.visible
+    }
+
     RowLayout {
         anchors.fill: parent
         anchors.margins: 16
@@ -130,7 +140,8 @@ ApplicationWindow {
                     title: "TOP-K WHEEL"
                     accent: win.cyan
                     TopKWheel {
-                        anchors.centerIn: parent
+                        anchors.fill: parent
+                        anchors.margins: 6
                         topk: ws.topk
                         sampledId: ws.sampledId
                         sampledToken: ws.sampledToken
@@ -247,42 +258,61 @@ ApplicationWindow {
                     Layout.fillWidth: true
                 }
 
-                TextArea {
-                    id: promptArea
+                Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 140
-                    placeholderText: "Type a prompt… (next step resets when you press Reset or edit text)"
-                    wrapMode: TextArea.Wrap
-                    text: "Hello, tiny transformer."
-                    color: win.withAlpha(win.cyan, 0.92)
-                    selectionColor: win.withAlpha(win.orange, 0.45)
-                    font.family: "Consolas"
-                    font.pixelSize: 14
-                    background: Rectangle {
-                        radius: 10
-                        color: win.withAlpha(win.panel, 0.85)
-                        border.width: 1
-                        border.color: win.withAlpha(win.cyan, 0.25)
+
+                    TextArea {
+                        id: promptArea
+                        anchors.fill: parent
+                        wrapMode: TextArea.Wrap
+                        text: "Hello, tiny transformer."
+                        color: win.withAlpha(win.cyan, 0.92)
+                        selectionColor: win.withAlpha(win.orange, 0.45)
+                        font.family: "Consolas"
+                        font.pixelSize: 14
+                        background: Rectangle {
+                            radius: 10
+                            color: win.withAlpha(win.panel, 0.85)
+                            border.width: 1
+                            border.color: win.withAlpha(win.cyan, 0.25)
+                        }
+                        onTextChanged: win.needsReset = true
                     }
-                    onTextChanged: win.needsReset = true
+
+                    Text {
+                        text: "Type a prompt… (next step resets when you press Reset or edit text)"
+                        visible: promptArea.text.length === 0 && !promptArea.activeFocus
+                        enabled: false
+                        color: win.withAlpha(win.cyan, 0.35)
+                        font.family: "Consolas"
+                        font.pixelSize: 13
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 10
+                        wrapMode: Text.WordWrap
+                    }
                 }
 
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
-                    Button {
+                    HudButton {
                         text: "Reset"
                         Layout.fillWidth: true
+                        accent: win.cyan
                         onClicked: win.needsReset = true
                     }
-                    Button {
+                    HudButton {
                         text: ws.busy ? "Working…" : "Generate Next"
                         enabled: ws.connected && !ws.busy && !ws.done
                         Layout.fillWidth: true
+                        accent: win.orange
                         onClicked: {
                             var p = win.needsReset ? promptArea.text : ""
                             ws.step(p, tempSlider.value, Math.round(topKSlider.value), topPSlider.value,
-                                    layerBox.currentIndex, headBox.currentIndex)
+                                     layerBox.currentIndex, headBox.currentIndex)
                             win.needsReset = false
                         }
                     }
@@ -291,11 +321,19 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 10
-                    CheckBox {
+                    HudCheckBox {
                         id: autoRun
                         text: "Auto-run"
                         checked: false
                         enabled: ws.connected
+                        accent: win.cyan
+                    }
+                    HudButton {
+                        text: "Backend Monitor"
+                        Layout.preferredWidth: 140
+                        enabled: true
+                        accent: win.cyan
+                        onClicked: backendWin.visible = !backendWin.visible
                     }
                     Text {
                         text: ws.done ? "EOS sampled" : ""
@@ -365,22 +403,26 @@ ApplicationWindow {
                         RowLayout {
                             Layout.fillWidth: true
                             Text { text: "Layer"; color: win.withAlpha(win.cyan, 0.85); font.family: "Consolas"; font.pixelSize: 12; Layout.preferredWidth: 110 }
-                            ComboBox {
+                            HudComboBox {
                                 id: layerBox
                                 Layout.fillWidth: true
                                 model: ["0", "1", "2", "3"]
                                 currentIndex: 1
+                                accent: win.cyan
+                                panelColor: win.panel
                             }
                         }
 
                         RowLayout {
                             Layout.fillWidth: true
                             Text { text: "Head"; color: win.withAlpha(win.cyan, 0.85); font.family: "Consolas"; font.pixelSize: 12; Layout.preferredWidth: 110 }
-                            ComboBox {
+                            HudComboBox {
                                 id: headBox
                                 Layout.fillWidth: true
                                 model: ["0", "1", "2", "3"]
                                 currentIndex: 2
+                                accent: win.cyan
+                                panelColor: win.panel
                             }
                         }
                     }

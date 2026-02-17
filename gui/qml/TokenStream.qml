@@ -9,6 +9,12 @@ Item {
 
     clip: true
 
+    onTokensChanged: {
+        Qt.callLater(function() {
+            if (view.count > 0) view.positionViewAtEnd()
+        })
+    }
+
     ListView {
         id: view
         anchors.fill: parent

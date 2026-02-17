@@ -1,5 +1,6 @@
 #include "websocketclient.h"
 
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -24,6 +25,11 @@ WebSocketClient::WebSocketClient(QObject *parent) : QObject(parent) {
 
 void WebSocketClient::connectNow() {
   setLastError(QString());
+  if (m_reconnectAttempt > 0) {
+    appendLog(QStringLiteral("Connecting to %1 (attempt %2)...").arg(wsUrl()).arg(m_reconnectAttempt));
+  } else {
+    appendLog(QStringLiteral("Connecting to %1...").arg(wsUrl()));
+  }
   m_ws.open(QUrl(wsUrl()));
 }
 
@@ -34,6 +40,7 @@ void WebSocketClient::onConnected() {
   m_reconnectAttempt = 0;
   emit connectedChanged();
   setLastError(QString());
+  appendLog(QStringLiteral("CONNECTED"));
 }
 
 void WebSocketClient::onDisconnected() {
@@ -52,11 +59,13 @@ void WebSocketClient::onDisconnected() {
   const int delay = qMin(maxMs, baseMs * (1 << shift));
   m_reconnectAttempt++;
   m_reconnectTimer.start(delay);
+  appendLog(QStringLiteral("DISCONNECTED (reconnect in %1ms)").arg(delay));
 }
 
 void WebSocketClient::onErrorOccurred(QAbstractSocket::SocketError error) {
   Q_UNUSED(error);
   setLastError(m_ws.errorString());
+  appendLog(QStringLiteral("SOCKET ERROR: %1").arg(m_ws.errorString()));
 }
 
 void WebSocketClient::setLastError(const QString &err) {
@@ -64,6 +73,22 @@ void WebSocketClient::setLastError(const QString &err) {
     return;
   m_lastError = err;
   emit lastErrorChanged();
+}
+
+void WebSocketClient::appendLog(const QString &line) {
+  const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz"));
+  m_logLines.append(QStringLiteral("[%1] %2").arg(stamp, line));
+  if (m_logLines.size() > MAX_LOG_LINES) {
+    m_logLines = m_logLines.mid(m_logLines.size() - MAX_LOG_LINES);
+  }
+  emit logLinesChanged();
+}
+
+void WebSocketClient::clearLog() {
+  if (m_logLines.isEmpty())
+    return;
+  m_logLines.clear();
+  emit logLinesChanged();
 }
 
 QVariant WebSocketClient::jsonToVariant(const QJsonValue &v) {
@@ -99,6 +124,37 @@ QVariant WebSocketClient::jsonToVariant(const QJsonValue &v) {
 }
 
 void WebSocketClient::onTextMessageReceived(const QString &message) {
+  // Store raw payload for visibility/debugging, but cap size to avoid memory spikes.
+  QString clipped = message;
+  if (clipped.size() > MAX_JSON_CHARS) {
+    clipped = clipped.left(MAX_JSON_CHARS);
+    clipped.append(QStringLiteral("\n...(truncated)..."));
+  }
+  if (m_lastJson != clipped) {
+    m_lastJson = clipped;
+    emit lastJsonChanged();
+  }
+
+  const int payloadBytes = message.toUtf8().size();
+  bool perfDirty = false;
+  if (m_lastPayloadBytes != payloadBytes) {
+    m_lastPayloadBytes = payloadBytes;
+    perfDirty = true;
+  }
+
+  if (m_roundTripActive) {
+    m_roundTripActive = false;
+    const qint64 ms = m_roundTripTimer.elapsed();
+    const double rtt = (ms < 0) ? 0.0 : double(ms);
+    if (m_lastRoundTripMs != rtt) {
+      m_lastRoundTripMs = rtt;
+      perfDirty = true;
+    }
+  }
+  if (perfDirty) {
+    emit perfChanged();
+  }
+
   if (m_busy) {
     m_busy = false;
     emit busyChanged();
@@ -108,12 +164,14 @@ void WebSocketClient::onTextMessageReceived(const QString &message) {
   const auto doc = QJsonDocument::fromJson(message.toUtf8(), &parseError);
   if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
     setLastError(QStringLiteral("JSON parse error: %1").arg(parseError.errorString()));
+    appendLog(QStringLiteral("RECV INVALID JSON (%1 bytes): %2").arg(payloadBytes).arg(parseError.errorString()));
     return;
   }
 
   const auto root = doc.object();
   if (root.contains("error")) {
     setLastError(root.value("error").toString());
+    appendLog(QStringLiteral("BACKEND ERROR: %1").arg(m_lastError));
     return;
   }
 
@@ -122,10 +180,12 @@ void WebSocketClient::onTextMessageReceived(const QString &message) {
   // tokens
   if (root.contains("tokens") && root.value("tokens").isArray()) {
     const auto arr = root.value("tokens").toArray();
+    const int n = arr.size();
+    const int start = (n > MAX_TOKENS_DISPLAY) ? (n - MAX_TOKENS_DISPLAY) : 0;
     QStringList out;
-    out.reserve(arr.size());
-    for (const auto &v : arr) {
-      out.append(v.toString());
+    out.reserve(n - start);
+    for (int i = start; i < n; i++) {
+      out.append(arr.at(i).toString());
     }
     m_tokens = out;
     emit tokensChanged();
@@ -198,18 +258,35 @@ void WebSocketClient::onTextMessageReceived(const QString &message) {
   // meta
   if (root.contains("meta") && root.value("meta").isObject()) {
     const auto meta = root.value("meta").toObject();
+
+    m_meta = jsonToVariant(QJsonValue(meta)).toMap();
     m_device = meta.value("device").toString(m_device);
     m_done = meta.value("done").toBool(false);
     emit metaChanged();
   }
+
+  appendLog(QStringLiteral("RECV %1 bytes  rtt=%2ms  done=%3")
+                .arg(payloadBytes)
+                .arg(QString::number(m_lastRoundTripMs, 'f', 0))
+                .arg(m_done ? QStringLiteral("true") : QStringLiteral("false")));
 }
 
 void WebSocketClient::step(QString prompt, double temperature, int topK, double topP, int vizLayer,
                            int vizHead) {
   if (!m_connected) {
     setLastError(QStringLiteral("Not connected to backend (%1).").arg(wsUrl()));
+    appendLog(QStringLiteral("STEP blocked (not connected)"));
     return;
   }
+
+  const bool willReset = !prompt.isEmpty();
+  appendLog(QStringLiteral("STEP reset=%1 temp=%2 topk=%3 topp=%4 layer=%5 head=%6")
+                .arg(willReset ? QStringLiteral("yes") : QStringLiteral("no"))
+                .arg(QString::number(temperature, 'f', 2))
+                .arg(topK)
+                .arg(QString::number(topP, 'f', 2))
+                .arg(vizLayer)
+                .arg(vizHead));
 
   QJsonObject obj;
   obj.insert("prompt", prompt);
@@ -221,11 +298,13 @@ void WebSocketClient::step(QString prompt, double temperature, int topK, double 
   obj.insert("viz_head", vizHead);
 
   const auto doc = QJsonDocument(obj);
-  m_ws.sendTextMessage(QString::fromUtf8(doc.toJson(QJsonDocument::Compact)));
+  const auto payload = doc.toJson(QJsonDocument::Compact);
+  m_ws.sendTextMessage(QString::fromUtf8(payload));
+  m_roundTripTimer.restart();
+  m_roundTripActive = true;
 
   if (!m_busy) {
     m_busy = true;
     emit busyChanged();
   }
 }
-

@@ -20,7 +20,11 @@ qt_add_qml_module(JarvisHUD
     VERSION 1.0
     QML_FILES
         qml/Main.qml
+        qml/BackendMonitor.qml
         qml/HudPanel.qml
+        qml/HudButton.qml
+        qml/HudCheckBox.qml
+        qml/HudComboBox.qml
         qml/AttentionView.qml
         qml/MLPView.qml
         qml/TokenStream.qml
@@ -28,4 +32,3 @@ qt_add_qml_module(JarvisHUD
 )
 
 target_link_libraries(JarvisHUD PRIVATE Qt6::Quick Qt6::WebSockets)
-
